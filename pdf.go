@@ -4,6 +4,7 @@
 package main
 
 import (
+	"./font"
 	"bufio"
 	"bytes"
 	"crypto/md5"
@@ -106,7 +107,7 @@ func (w *PDFWriter) WriteFooter(root, info int) {
 	w.w.Flush()
 }
 
-func (w *PDFWriter) WriteFontEmbedded(id int, font *Font) {
+func (w *PDFWriter) WriteFontEmbedded(id int, f *font.Font) {
 	var (
 		fontBase       = id
 		fontDescedant  = w.NextID()
@@ -114,6 +115,9 @@ func (w *PDFWriter) WriteFontEmbedded(id int, font *Font) {
 		fontStream     = w.NextID()
 		fontUnicode    = w.NextID()
 	)
+
+	name := encodeName(f.PostscriptName)
+	cff := f.CFF()
 
 	// base font object
 	w.WriteObjectf(fontBase, `<<
@@ -123,15 +127,15 @@ func (w *PDFWriter) WriteFontEmbedded(id int, font *Font) {
   /Encoding /Identity-H
   /ToUnicode %d 0 R
   /DescendantFonts [%d 0 R]
->>`, encodeName(font.NamePDF), fontUnicode, fontDescedant)
+>>`, name, fontUnicode, fontDescedant)
 
 	// font descedant
-	widths := make([]int, font.NumGlyphs())
+	widths := make([]int, f.NumGlyphs())
 	for i := 0; i < len(widths); i++ {
-		widths[i] = font.Scale(font.HMetric(Index(i)).Width, 1000)
+		widths[i] = f.Scale(f.HMetric(font.Index(i)).Width, 1000)
 	}
 	fontType := 2
-	if font.cff != nil {
+	if cff != nil {
 		fontType = 0
 	}
 	w.WriteObjectf(fontDescedant, `<<
@@ -147,13 +151,18 @@ func (w *PDFWriter) WriteFontEmbedded(id int, font *Font) {
   /DW %d
   /W [0 %v]
   /FontDescriptor %d 0 R
->>`, fontType, encodeName(font.NamePDF), widths[0], widths, fontDescriptor)
+>>`, fontType, name, widths[0], widths, fontDescriptor)
 
 	// font descriptor
 	fontFile := 2
-	if font.cff != nil {
+	if cff != nil {
 		fontFile = 3
 	}
+	flags := 0
+	if f.ItalicAngle != 0 {
+		flags |= 0x40 // italic
+	}
+	flags |= 0x20 // non-symbolic font
 	w.WriteObjectf(fontDescriptor, `<<
   /Type /FontDescriptor
   /FontName %s
@@ -162,22 +171,23 @@ func (w *PDFWriter) WriteFontEmbedded(id int, font *Font) {
   /CapHeight %d
   /FontBBox [%d %d %d %d]
   /ItalicAngle %.4f
-  /Flags 0
+  /Flags %d
   /StemV 0
   /FontFile%d %d 0 R
->>`, encodeName(font.NamePDF), font.Scale(font.ascent, 1000), font.Scale(font.descent, 1000),
-		font.Scale(font.capHeight, 1000), font.Scale(font.xmin, 1000),
-		font.Scale(font.ymin, 1000), font.Scale(font.xmax, 1000),
-		font.Scale(font.ymax, 1000), font.italic, fontFile, fontStream)
+>>`, name, f.Scale(f.Ascender, 1000), f.Scale(f.Descender, 1000),
+		f.Scale(f.CapHeight, 1000), f.Scale(f.XMin, 1000),
+		f.Scale(f.YMin, 1000), f.Scale(f.XMax, 1000),
+		f.Scale(f.YMax, 1000), f.ItalicAngle, flags, fontFile, fontStream)
 
 	// font stream
 	w.WriteObjectStart(fontStream)
-	if font.cff == nil {
-		fmt.Fprintf(w, "<< /Length %d /Length1 %d >>\n", len(font.ttf), len(font.ttf))
-		fmt.Fprintf(w, "stream\n%s\nendstream\n", font.ttf)
+	if cff == nil {
+		ttf := f.TTF()
+		fmt.Fprintf(w, "<< /Length %d /Length1 %d >>\n", len(ttf), len(ttf))
+		fmt.Fprintf(w, "stream\n%s\nendstream\n", ttf)
 	} else {
-		fmt.Fprintf(w, "<< /Length %d /Length1 %d /Subtype /Type1C >>\n", len(font.cff), len(font.cff)) // CIDType0C or Type1C depending on the font
-		fmt.Fprintf(w, "stream\n%s\nendstream\n", font.cff)
+		fmt.Fprintf(w, "<< /Length %d /Length1 %d /Subtype /CIDFontType0C >>\n", len(cff), len(cff)) // CIDType0C or Type1C depending on the font
+		fmt.Fprintf(w, "stream\n%s\nendstream\n", cff)
 	}
 	w.WriteObjectEnd()
 
@@ -193,10 +203,10 @@ begincmap
 1 begincodespacerange
 <0000> <FFFF>
 endcodespacerange
-`, encodeName(font.NamePDF)[1:], encodeName(font.NamePDF)[1:])
-	glyphs := make([]rune, font.NumGlyphs())
+`, name[1:], name[1:])
+	glyphs := make([]rune, f.NumGlyphs())
 	for i := 0; i < math.MaxUint16; i++ {
-		glyphs[font.Index(rune(i))] = rune(i)
+		glyphs[f.Index(rune(i))] = rune(i)
 	}
 	total := 0
 	for i := 0; i < len(glyphs); i++ {
@@ -267,12 +277,20 @@ func (w *PDFWriter) Write(p []byte) (int, error) {
 	return n, w.err
 }
 
+func u(v int) float32 {
+	return float32(v) / 1000
+}
+
 func (w *PDFWriter) Pos() int {
 	return w.pos
 }
 
 func mmToPt(v float32) float32 {
 	return v * 72.0 / 25.4
+}
+
+func mm(v float32) int {
+	return int(v * 72.0 / 25.4 * 1000)
 }
 
 func encodeName(s string) string {

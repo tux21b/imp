@@ -76,3 +76,111 @@ func (b *Box) TotalWidth() float32 {
 func (b *Box) TotalHeight() float32 {
 	return b.MarginTop.Computed + b.PaddingTop.Computed + b.Height.Computed + b.PaddingBottom.Computed + b.MarginBottom.Computed
 }
+
+/*
+
+type Point struct {
+	X int
+	Y int
+}
+
+func P(x, y float32) Point {
+	return Point{mm(x), mm(y)}
+}
+
+type Box struct {
+	Size   Point
+	Pos    Point
+	Anchor Point
+}
+
+func (b *Box) Box() *Box {
+	return b
+}
+
+type Object interface {
+	Box() *Box
+}
+
+type Container interface {
+	Object
+	Children() []Object
+}
+
+type HBox struct {
+	box  Box
+	objs []Object
+}
+
+func NewHBox(objs ...Object) *HBox {
+	h := &HBox{objs: objs}
+	maxAsc, maxDesc := 0, 0
+	for i := range h.objs {
+		b := h.objs[i].Box()
+		if b.Anchor.Y > maxDesc {
+			maxDesc = b.Anchor.Y
+		}
+		if b.Size.Y-b.Anchor.Y > maxAsc {
+			maxAsc = b.Size.Y - b.Anchor.Y
+		}
+	}
+	x := 0
+	for i := range h.objs {
+		b := h.objs[i].Box()
+		b.Pos.X = x
+		b.Pos.Y = maxDesc - b.Anchor.Y
+		x += b.Size.X
+	}
+	h.box.Size.X = x
+	h.box.Size.Y = maxAsc + maxDesc
+	h.box.Anchor.Y = maxDesc
+	return h
+}
+
+func (h *HBox) Box() *Box {
+	return &h.box
+}
+
+func (h *HBox) Children() []Object {
+	return h.objs
+}
+
+type VBox struct {
+	box  Box
+	objs []Object
+}
+
+func NewVBox(objs ...Object) *VBox {
+	v := &VBox{objs: objs}
+	maxAsc, maxDesc := 0, 0
+	for i := range v.objs {
+		b := v.objs[i].Box()
+		if b.Anchor.X > maxDesc {
+			maxDesc = b.Anchor.X
+		}
+		if b.Size.X-b.Anchor.X > maxAsc {
+			maxAsc = b.Size.X - b.Anchor.X
+		}
+	}
+	y := 0
+	for i := range v.objs {
+		b := v.objs[i].Box()
+		b.Pos.X = maxDesc - b.Anchor.X
+		b.Pos.Y = y
+		y += b.Size.Y
+	}
+	v.box.Size.X = maxAsc + maxDesc
+	v.box.Size.Y = y
+	v.box.Anchor.X = maxDesc
+	return v
+}
+
+func (v *VBox) Box() *Box {
+	return &v.box
+}
+
+func (v *VBox) Children() []Object {
+	return v.objs
+}
+
+*/

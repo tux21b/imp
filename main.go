@@ -4,11 +4,11 @@
 package main
 
 import (
+	"./font"
 	"bytes"
 	"fmt"
 	"image"
 	_ "image/jpeg"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -17,16 +17,16 @@ import (
 )
 
 type Imp struct {
-	fontNormal *Font
-	fontBold   *Font
-	fontItalic *Font
+	fontNormal *font.Font
+	fontBold   *font.Font
+	fontItalic *font.Font
 
 	State      State
 	stateStack []State
 }
 
 type State struct {
-	Font *Font
+	Font *font.Font
 	Size float64
 }
 
@@ -88,13 +88,12 @@ func (m *Imp) CalcMaxAscent(line []string) float64 {
 				m.Apply(tok)
 			}
 		}
-		a := float64(m.State.Font.Scale(m.State.Font.ascent, 1000)) / 1000 * m.State.Size
+		a := float64(m.State.Font.Scale(m.State.Font.Ascender, 1000)) / 1000 * m.State.Size
 		if a > ascent {
 			ascent = a
 		}
 	}
 	m.PopState()
-	fmt.Println("max ascent: ", ascent)
 	return ascent
 }
 
@@ -116,33 +115,23 @@ func (m *Imp) Apply(cmd string) {
 }
 
 func main() {
-
-	ttfNormal, err := ioutil.ReadFile("AGaramondPro-Regular.otf")
+	fontNormal, err := font.Open("AGaramondPro-Regular.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fontNormal, err := ParseFont(ttfNormal)
+	fontBold, err := font.Open("AGaramondPro-Bold.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-
-	ttfBold, err := ioutil.ReadFile("AGaramondPro-Bold.otf")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	fontBold, err := ParseFont(ttfBold)
+	fontItalic, err := font.Open("AGaramondPro-Italic.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	ttfItalic, err := ioutil.ReadFile("AGaramondPro-Italic.otf")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	fontItalic, err := ParseFont(ttfItalic)
-	if err != nil {
-		log.Fatalln(err)
-	}
+	fontNormal.StringToGlyphs("Affe")
+	fontNormal.StringToGlyphs("ff")
+	fontNormal.StringToGlyphs("ffx")
+	fontNormal.StringToGlyphs("affil")
 
 	imgFile, err := os.Open("buddy.jpg")
 	if err != nil {
@@ -292,8 +281,8 @@ func main() {
 			inTJ = true
 		}
 		buf.WriteString("<")
-		for _, r := range token {
-			fmt.Fprintf(buf, "%04x", imp.State.Font.Index(r))
+		for _, glyph := range imp.State.Font.StringToGlyphs(token) {
+			fmt.Fprintf(buf, "%04x", glyph)
 		}
 		buf.WriteString("> ")
 		if token == " " && wordSpacing > 0 {
@@ -407,4 +396,6 @@ Nullam quis ante. Etiam sit amet orci eget eros faucibus tincidunt. Duis leo.
 Sed fringilla mauris sit amet nibh. Donec sodales sagittis magna. Sed consequat,
 leo eget bibendum sodales, augue velit cursus nunc.
 
-Blöde „Sonderzeichen“ sind doof! © €`
+Blöde „Sonderzeichen“ sind doof! © €
+
+OpenType fonts with ligatures like ff, ffi and ffj are also supported.`
