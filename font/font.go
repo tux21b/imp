@@ -648,7 +648,6 @@ func (f *Font) StringToGlyphs(text string) []Index {
 	for _, r := range text {
 		glyphs = append(glyphs, f.Index(r))
 	}
-	return glyphs
 	for i := 0; i < len(glyphs); i++ {
 		for _, liga := range f.liga {
 			if i+len(liga.Old) > len(glyphs) {
