@@ -61,8 +61,15 @@ func (m *Imp) SplitLines(tokens []string, maxWidth float64) {
 					m.Apply(tokens[i])
 				}
 			} else {
-				for _, r := range tokens[i] {
-					width += float64(m.State.Font.Scale(m.State.Font.HMetric(m.State.Font.Index(r)).Width, 1000)) / 1000 * m.State.Size
+				glyphs := m.State.Font.StringToGlyphs(tokens[i])
+				for i := range glyphs {
+					width += float64(m.State.Font.Scale(m.State.Font.HMetric(glyphs[i]).Width, 1000)) / 1000 * m.State.Size
+					if i > 0 {
+						kern := m.State.Font.Kerning(1000, glyphs[i-1], glyphs[i])
+						if kern != 0 {
+							width += float64(kern) / 1000 * m.State.Size
+						}
+					}
 				}
 			}
 		}
@@ -242,8 +249,13 @@ func main() {
 					numSpaces++
 				}
 				if !strings.HasPrefix(tok, "\\") {
-					for _, glyph := range imp.State.Font.StringToGlyphs(tok) {
-						width += float64(imp.State.Font.Scale(imp.State.Font.HMetric(glyph).Width, 1000)) / 1000 * imp.State.Size
+					glyphs := imp.State.Font.StringToGlyphs(tok)
+					for j := range glyphs {
+						if j > 0 {
+							kern := imp.State.Font.Kerning(1000, glyphs[j-1], glyphs[j])
+							width += float64(kern) / 1000 * imp.State.Size
+						}
+						width += float64(imp.State.Font.Scale(imp.State.Font.HMetric(glyphs[j]).Width, 1000)) / 1000 * imp.State.Size
 					}
 				} else {
 					imp.Apply(tok)
@@ -281,8 +293,15 @@ func main() {
 			inTJ = true
 		}
 		buf.WriteString("<")
-		for _, glyph := range imp.State.Font.StringToGlyphs(token) {
-			fmt.Fprintf(buf, "%04x", glyph)
+		glyphs := imp.State.Font.StringToGlyphs(token)
+		for i := range glyphs {
+			if i > 0 {
+				kern := imp.State.Font.Kerning(1000, glyphs[i-1], glyphs[i])
+				if kern != 0 {
+					fmt.Fprintf(buf, "> %d <", -kern)
+				}
+			}
+			fmt.Fprintf(buf, "%04x", glyphs[i])
 		}
 		buf.WriteString("> ")
 		if token == " " && wordSpacing > 0 {
@@ -397,4 +416,6 @@ elementum semper nisi. Aenean vulputate eleifend tellus.
 Aenean leo ligula, porttitor eu, consequat \italic vitae\normal, eleifend ac,
 enim. Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus.
 Phasellus viverra nulla ut metus varius laoreet. Quisque rutrum. Aenean
-imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.`
+imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.
+
+BV BW BH F, P. Tä V.`

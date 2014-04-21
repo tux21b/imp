@@ -34,7 +34,9 @@ type Font struct {
 
 	tables map[string][]byte
 
-	liga []Ligature
+	liga      []Ligature
+	kern      []Kerning
+	classKern *classKerner
 
 	// font tables
 	full []byte // complete TTF / OTF file
@@ -116,13 +118,13 @@ func Parse(data []byte) (*Font, error) {
 	if err := f.parseMaxp(f.tables["maxp"]); err != nil {
 		return nil, err
 	}
-	if err := f.parseKern(f.tables["kern"]); err != nil {
-		return nil, err
-	}
 	if err := f.parsePost(f.tables["post"]); err != nil {
 		return nil, err
 	}
 	if err := f.parseGsub(); err != nil {
+		return nil, err
+	}
+	if err := f.parseGpos(); err != nil {
 		return nil, err
 	}
 	return f, nil
@@ -218,102 +220,14 @@ func (f *Font) parseGsub() error {
 		lookupTableOffset  = int(u16(data, 8))
 	)
 
-	reverse := make([]rune, f.NumGlyphs())
-	for i := 0; i < math.MaxUint16; i++ {
-		reverse[f.Index(rune(i))] = rune(i)
+	featureIDs, err := f.parseScriptTable(data, scriptTableOffset, "", "")
+	if err != nil {
+		return err
 	}
 
-	// parse script list and locate the default script table
-	if scriptTableOffset+2 > len(data) {
-		return errorf("unexpected end of GSUB script table")
-	}
-	scriptsCount := int(u16(data, scriptTableOffset))
-	if scriptTableOffset+2+scriptsCount*6 > len(data) {
-		return errorf("unexpected end of GSUB script list with %d entries", scriptsCount)
-	}
-	scriptOffset := 0
-	for i := 0; i < scriptsCount; i++ {
-		x := scriptTableOffset + 2 + i*6
-		if scriptTag := string(data[x : x+4]); scriptTag == "DFLT" {
-			scriptOffset = int(u16(data, x+4))
-		}
-	}
-	if scriptOffset <= 0 {
-		return errorf("default GSUB script table not found")
-	}
-	scriptOffset += scriptTableOffset
-
-	// parse script table and locate the default language/system table
-	if scriptOffset+4 > len(data) {
-		return errorf("invalid script offset")
-	}
-	langSysOffset := int(u16(data, scriptOffset))
-	langSysCount := int(u16(data, scriptOffset+2))
-	if scriptOffset+4+6*langSysCount > len(data) {
-		return errorf("unexpected end of GSUB script table with %d entries", langSysCount)
-	}
-	for i := 0; i < langSysCount; i++ {
-		x := scriptOffset + 4 + 6*i
-		langID := string(data[x : x+4])
-		if langID == "dflt" {
-			langSysOffset = int(u16(data, x+4))
-		}
-	}
-	if langSysOffset <= 0 {
-		return errorf("default GSUB language/system table not found")
-	}
-	langSysOffset += scriptOffset
-
-	// parse language/system table to get all features
-	var featureIDs []int
-	if langSysOffset+6 > len(data) {
-		return errorf("invalid langSysOffset 0x%x", langSysOffset)
-	}
-	if required := u16(data, langSysOffset+2); required != math.MaxUint16 {
-		featureIDs = append(featureIDs, int(required))
-	}
-	featureTableCount := int(u16(data, langSysOffset+4))
-	if langSysOffset+6+featureTableCount*2 > len(data) {
-		return errorf("unexpected end of GSUB lang/sys table with %d entries", featureTableCount)
-	}
-	for i := 0; i < featureTableCount; i++ {
-		featureIDs = append(featureIDs, int(u16(data, langSysOffset+6+i*2)))
-	}
-
-	// parse feature table
-	if featureTableOffset+2 > len(data) {
-		return errorf("invalid GSUB feature table at 0x%x", featureTableOffset)
-	}
-	featureCount := int(u16(data, featureTableOffset))
-	if featureTableOffset+2+featureCount*6 > len(data) {
-		return errorf("unexpected end of GSUB feature table with %d entries", featureCount)
-	}
-	lookupOffset := -1
-	for _, id := range featureIDs {
-		if id >= featureCount {
-			return errorf("can not find feature %d in GSUB feature table", id)
-		}
-		x := featureTableOffset + 2 + id*6
-		if name := string(data[x : x+4]); name == "liga" {
-			lookupOffset = int(u16(data, x+4))
-		}
-	}
-	if lookupOffset < 0 {
-		return errorf("GSUB feature not found")
-	}
-	lookupOffset += featureTableOffset
-
-	// parse lookup list
-	if lookupOffset+4 > len(data) {
-		return errorf("invalid GSUB lookup list at 0x%x", lookupOffset)
-	}
-	lookupListCount := int(u16(data, lookupOffset+2))
-	if lookupOffset+4+2*lookupListCount > len(data) {
-		return errorf("unexpected end of GSUB lookup list at 0x%x", lookupOffset)
-	}
-	lookupIDs := make([]int, lookupListCount)
-	for i := 0; i < len(lookupIDs); i++ {
-		lookupIDs[i] = int(u16(data, lookupOffset+4+2*i))
+	lookupIDs, err := f.parseFeatureTable(data, featureTableOffset, featureIDs, "liga")
+	if err != nil {
+		return err
 	}
 
 	// parse lookup table
@@ -399,6 +313,276 @@ func (f *Font) parseGsub() error {
 		}
 	}
 	return nil
+}
+
+func (f *Font) parseGpos() error {
+	data := f.tables["GPOS"]
+	if len(data) == 0 {
+		return nil // GPOS block is optional
+	}
+	if len(data) < 10 {
+		return errorf("GPOS block is too short (%d bytes)", len(data))
+	}
+	var (
+		scriptTableOffset  = int(u16(data, 4))
+		featureTableOffset = int(u16(data, 6))
+		lookupTableOffset  = int(u16(data, 8))
+	)
+
+	featureIDs, err := f.parseScriptTable(data, scriptTableOffset, "", "")
+	if err != nil {
+		return err
+	}
+
+	lookupIDs, err := f.parseFeatureTable(data, featureTableOffset, featureIDs, "kern")
+	if err != nil {
+		return err
+	}
+
+	reverse := make([]rune, f.NumGlyphs())
+	for i := 0; i < math.MaxUint16; i++ {
+		reverse[f.Index(rune(i))] = rune(i)
+	}
+
+	for _, i := range lookupIDs {
+		offset := int(u16(data, lookupTableOffset+2+i*2)) + lookupTableOffset
+
+		if offset+6 > len(data) {
+			return errorf("unexpected end of GPOS lookup entry at 0x%x", offset)
+		}
+		kind := int(u16(data, offset))
+		subblockCount := int(u16(data, offset+4))
+		if offset+6+subblockCount*2 > len(data) {
+			return errorf("unexpected end of GPOS lookup entry at 0x%x", offset)
+		}
+		if kind != 2 {
+			return errorf("unsupported GPOS lookup type %d", kind)
+		}
+		for j := 0; j < subblockCount; j++ {
+			subblockOffset := int(u16(data, offset+6+j*2)) + offset
+			if subblockOffset+2 > len(data) {
+				return errorf("unexpected end of GPOS subblock at 0x%x", subblockOffset)
+			}
+			format := u16(data, subblockOffset)
+			if format == 1 {
+				if subblockOffset+10 > len(data) {
+					return errorf("unexpected end of GPOS subblock at 0x%x", subblockOffset)
+				}
+				coverageOffset := int(u16(data, subblockOffset+2)) + subblockOffset
+				format1 := u16(data, subblockOffset+4)
+				format2 := u16(data, subblockOffset+6)
+				pairSetCount := int(u16(data, subblockOffset+8))
+				if format1 != 4 || format2 != 0 {
+					return errorf("unsupported kern format %d %d", format1, format2)
+				}
+				// parse coverage
+				if coverageOffset+4+2*pairSetCount > len(data) {
+					return errorf("unexpected end of GPOS coverage at 0x%x", coverageOffset)
+				}
+				if format := u16(data, coverageOffset); format != 1 {
+					return errorf("unsupported GPOS coverage format %d", format)
+				}
+				if count := int(u16(data, coverageOffset+2)); count != pairSetCount {
+					return errorf("GPOS coverage length doesn't match pair set length")
+				}
+				coverage := make([]Index, pairSetCount)
+				for k := 0; k < len(coverage); k++ {
+					coverage[k] = Index(u16(data, coverageOffset+4+2*k))
+				}
+				// parse pair sets
+				if subblockOffset+10+pairSetCount*2 > len(data) {
+					return errorf("unexpected end of GPOS kern subblock at 0x%x", subblockOffset)
+				}
+				for k := 0; k < pairSetCount; k++ {
+					pairSetOffset := int(u16(data, subblockOffset+10+k*2)) + subblockOffset
+					if pairSetOffset+2 > len(data) {
+						return errorf("unexpected end of GPOS pair set at 0x%x", pairSetOffset)
+					}
+					pairCount := int(u16(data, pairSetOffset))
+					if pairSetOffset+2+4*pairCount > len(data) {
+						return errorf("unexpected end of GPOS pair set at 0x%x", pairSetOffset)
+					}
+					// parse pairs
+					for l := 0; l < pairCount; l++ {
+						secondGlyph := Index(int(u16(data, pairSetOffset+2+4*l)))
+						kern := int(int16(u16(data, pairSetOffset+2+4*l+2)))
+						f.kern = append(f.kern, Kerning{coverage[k], secondGlyph, kern})
+					}
+				}
+			} else if format == 2 {
+				if subblockOffset+16 > len(data) {
+					return errorf("unexpected end of GPOS subblock at 0x%x", subblockOffset)
+				}
+				format1 := u16(data, subblockOffset+4)
+				format2 := u16(data, subblockOffset+6)
+				classOffset1 := int(u16(data, subblockOffset+8)) + subblockOffset
+				classOffset2 := int(u16(data, subblockOffset+10)) + subblockOffset
+				classCount1 := u16(data, subblockOffset+12)
+				classCount2 := u16(data, subblockOffset+14)
+				if format1 != 4 || format2 != 0 {
+					return errorf("unsupported kern format %d %d", format1, format2)
+				}
+				first, err := f.parseKernClassDef(data, classOffset1, classCount1)
+				if err != nil {
+					return err
+				}
+				second, err := f.parseKernClassDef(data, classOffset2, classCount2)
+				if err != nil {
+					return err
+				}
+				if subblockOffset+16+int(classCount1)*int(classCount2)*2 > len(data) {
+					return errorf("unexpected end of GPOS subblock at 0x%x", subblockOffset)
+				}
+				table := make([]int, classCount1*classCount2)
+				for k := 0; k < len(table); k++ {
+					table[k] = int(int16(u16(data, subblockOffset+16+k*2)))
+				}
+				f.classKern = &classKerner{
+					classA: first,
+					classB: second,
+					table:  table,
+					countA: int(classCount1),
+					countB: int(classCount2),
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (f *Font) parseKernClassDef(data []byte, offset int, classCount uint16) ([]uint16, error) {
+	if offset+4 > len(data) {
+		return nil, errorf("unexpected end of class definition")
+	}
+	if format := u16(data, offset); format != 2 {
+		return nil, errorf("unsupported class definition format %d", format)
+	}
+	count := int(u16(data, offset+2))
+	if offset+4+count*6 > len(data) {
+		return nil, errorf("unexpected end of class definition")
+	}
+	classes := make([]uint16, f.nGlyph)
+	for k := 0; k < count; k++ {
+		start := Index(u16(data, offset+4+k*6))
+		end := Index(u16(data, offset+4+k*6+2))
+		class := u16(data, offset+4+k*6+4)
+		if end >= Index(len(classes)) {
+			return nil, errorf("invalid glyph range %d %d", start, end)
+		}
+		if class >= classCount {
+			return nil, errorf("invalid class number %d", class)
+		}
+		for l := start; l <= end; l++ {
+			classes[l] = class
+		}
+	}
+	return classes, nil
+}
+
+func (f *Font) parseScriptTable(data []byte, scriptTableOffset int, script string, lang string) ([]int, error) {
+	// parse script list and locate the default script table
+	if scriptTableOffset+2 > len(data) {
+		return nil, errorf("unexpected end of GSUB script table")
+	}
+	scriptsCount := int(u16(data, scriptTableOffset))
+	if scriptTableOffset+2+scriptsCount*6 > len(data) {
+		return nil, errorf("unexpected end of GSUB script list with %d entries", scriptsCount)
+	}
+	scriptOffset := 0
+	for i := 0; i < scriptsCount; i++ {
+		x := scriptTableOffset + 2 + i*6
+		if scriptTag := string(data[x : x+4]); scriptTag == "DFLT" {
+			scriptOffset = int(u16(data, x+4))
+		} else if scriptTag == script {
+			scriptOffset = int(u16(data, x+4))
+			break
+		}
+	}
+	if scriptOffset <= 0 {
+		return nil, errorf("no suitable script table not found")
+	}
+	scriptOffset += scriptTableOffset
+
+	// parse script table and locate the default language/system table
+	if scriptOffset+4 > len(data) {
+		return nil, errorf("invalid script offset")
+	}
+	langSysOffset := int(u16(data, scriptOffset))
+	langSysCount := int(u16(data, scriptOffset+2))
+	if scriptOffset+4+6*langSysCount > len(data) {
+		return nil, errorf("unexpected end of script table with %d entries", langSysCount)
+	}
+	for i := 0; i < langSysCount; i++ {
+		x := scriptOffset + 4 + 6*i
+		langID := string(data[x : x+4])
+		if langID == lang {
+			langSysOffset = int(u16(data, x+4))
+			break
+		} else if langID == "dflt" {
+			langSysOffset = int(u16(data, x+4))
+		}
+	}
+	if langSysOffset <= 0 {
+		return nil, errorf("no suitable language/system table found")
+	}
+	langSysOffset += scriptOffset
+
+	// parse language/system table to get all features
+	var featureIDs []int
+	if langSysOffset+6 > len(data) {
+		return nil, errorf("invalid langSysOffset 0x%x", langSysOffset)
+	}
+	if required := u16(data, langSysOffset+2); required != math.MaxUint16 {
+		featureIDs = append(featureIDs, int(required))
+	}
+	featureTableCount := int(u16(data, langSysOffset+4))
+	if langSysOffset+6+featureTableCount*2 > len(data) {
+		return nil, errorf("unexpected end of lang/sys table with %d entries", featureTableCount)
+	}
+	for i := 0; i < featureTableCount; i++ {
+		featureIDs = append(featureIDs, int(u16(data, langSysOffset+6+i*2)))
+	}
+
+	return featureIDs, nil
+}
+
+func (f *Font) parseFeatureTable(data []byte, featureTableOffset int, featureIDs []int, feature string) ([]int, error) {
+	// parse feature table
+	if featureTableOffset+2 > len(data) {
+		return nil, errorf("invalid feature table at 0x%x", featureTableOffset)
+	}
+	featureCount := int(u16(data, featureTableOffset))
+	if featureTableOffset+2+featureCount*6 > len(data) {
+		return nil, errorf("unexpected end of feature table with %d entries", featureCount)
+	}
+	lookupOffset := -1
+	for _, id := range featureIDs {
+		if id >= featureCount {
+			return nil, errorf("can not find feature %d in GSUB feature table", id)
+		}
+		x := featureTableOffset + 2 + id*6
+		if name := string(data[x : x+4]); name == feature {
+			lookupOffset = int(u16(data, x+4))
+		}
+	}
+	if lookupOffset < 0 {
+		return nil, errorf("feature %q not found", feature)
+	}
+	lookupOffset += featureTableOffset
+
+	// parse lookup list
+	if lookupOffset+4 > len(data) {
+		return nil, errorf("invalid lookup list at 0x%x", lookupOffset)
+	}
+	lookupListCount := int(u16(data, lookupOffset+2))
+	if lookupOffset+4+2*lookupListCount > len(data) {
+		return nil, errorf("unexpected end of lookup list at 0x%x", lookupOffset)
+	}
+	lookupIDs := make([]int, lookupListCount)
+	for i := 0; i < len(lookupIDs); i++ {
+		lookupIDs[i] = int(u16(data, lookupOffset+4+2*i))
+	}
+	return lookupIDs, nil
 }
 
 func (f *Font) parseCmap(cmap []byte) error {
@@ -513,36 +697,6 @@ func (f *Font) parseMaxp(maxp []byte) error {
 	return nil
 }
 
-func (f *Font) parseKern(kern []byte) error {
-	if len(kern) == 0 {
-		return nil
-	}
-	if len(kern) < 18 {
-		return FontError("TTF kern data too short")
-	}
-	version, offset := u16(kern, 0), 2
-	if version != 0 {
-		return FontError(fmt.Sprintf("unsupported TTF kern version: %d", version))
-	}
-	n, offset := u16(kern, offset), offset+2
-	if n != 1 {
-		return FontError(fmt.Sprintf("unsupported number of kern tables: %d", n))
-	}
-	offset += 2
-	length, offset := int(u16(kern, offset)), offset+2
-	coverage, offset := u16(kern, offset), offset+2
-	if coverage != 0x0001 {
-		// We only support horizontal kerning.
-		return FontError(fmt.Sprintf("unsupported kern coverage: 0x%04x", coverage))
-	}
-	f.nKern, offset = int(u16(kern, offset)), offset+2
-	if 6*f.nKern != length-14 {
-		return FontError("bad kern table length")
-	}
-	f.kernTable = kern[14:]
-	return nil
-}
-
 func (f *Font) parsePost(post []byte) error {
 	if len(post) < 16 {
 		return FontError("TTF post block is too short")
@@ -556,24 +710,17 @@ func (f *Font) Scale(value, scale int) int {
 }
 
 // Kerning returns the kerning for the given glyph pair.
-func (f *Font) Kerning(scale int, i0, i1 Index) int {
-	if f.nKern == 0 {
-		return 0
-	}
-	g := uint32(i0)<<16 | uint32(i1)
-	lo, hi := 0, f.nKern
-	for lo < hi {
-		i := (lo + hi) / 2
-		ig := u32(f.kernTable, 4+6*i)
-		if ig < g {
-			lo = i + 1
-		} else if ig > g {
-			hi = i
-		} else {
-			return f.Scale(scale, int(int16(u16(f.kernTable, 8+6*i))))
+func (f *Font) Kerning(scale int, a, b Index) int {
+	kern := 0
+	for i := 0; i < len(f.kern); i++ {
+		if f.kern[i].First == a && f.kern[i].Second == b {
+			kern += f.kern[i].Horiz
 		}
 	}
-	return 0
+	if f.classKern != nil {
+		kern += f.classKern.Kern(a, b)
+	}
+	return f.Scale(kern, scale)
 }
 
 func (f *Font) NumGlyphs() int {
@@ -710,6 +857,31 @@ type cm struct {
 type Ligature struct {
 	Old []Index
 	New Index
+}
+
+type Kerner interface {
+	Kern(a, b Index) int
+}
+
+type classKerner struct {
+	classA []uint16
+	classB []uint16
+	table  []int
+	countA int
+	countB int
+}
+
+func (c *classKerner) Kern(a, b Index) int {
+	if int(a) >= len(c.classA) || int(b) >= len(c.classB) {
+		return 0
+	}
+	return c.table[int(c.classA[a])+int(c.classB[b])*c.countA]
+}
+
+type Kerning struct {
+	First  Index
+	Second Index
+	Horiz  int
 }
 
 // FontError is used to report various errors about invalid TTF and OTF files.
