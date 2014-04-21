@@ -242,8 +242,8 @@ func main() {
 					numSpaces++
 				}
 				if !strings.HasPrefix(tok, "\\") {
-					for _, r := range tok {
-						width += float64(imp.State.Font.Scale(imp.State.Font.HMetric(imp.State.Font.Index(r)).Width, 1000)) / 1000 * imp.State.Size
+					for _, glyph := range imp.State.Font.StringToGlyphs(tok) {
+						width += float64(imp.State.Font.Scale(imp.State.Font.HMetric(glyph).Width, 1000)) / 1000 * imp.State.Size
 					}
 				} else {
 					imp.Apply(tok)
@@ -371,9 +371,20 @@ func Lex(input string) []string {
 	return tokens
 }
 
-var fullText = `\title Lorem Ipsum!\normal\par
+var fullText = `\title Hello Imp!\normal\par
 
-\normal Lorem \italic ipsum dolor \normal sit amet, consectetuer adipiscing elit. Aenean commodo
+\normal This output was produced by \bold Imp\normal, a very early prototype
+of a \italic modern typesetting system \normal written in Go. Imp is able
+to output PDF files, has full Unicode support and supports modern font
+formats like OpenType™ and TrueType™.
+
+For example Imp currently works well with characters like € or ©, can deal
+with other languages \italic „Umlaute sind blöd“ \normal and renders
+ligatures like Th, ff, ffi, ffj automatically. A good input format with an
+extensive macro system (similar to TeX or lout) is still missing. Feel
+free to contribute!
+
+Lorem \italic ipsum dolor \normal sit amet, consectetuer adipiscing elit. Aenean commodo
 ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis
 parturient montes, \bold nascetur ridiculus mus\normal. Donec quam felis,
 ultricies nec, pellentesque eu, pretium quis, sem. Nulla consequat massa quis enim.
@@ -383,19 +394,7 @@ arcu. In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo. Nullam
 dictum felis eu pede mollis pretium. Integer tincidunt. Cras dapibus. Vivamus
 elementum semper nisi. Aenean vulputate eleifend tellus.
 
-Aenean leo ligula, porttitor eu, consequat \bold vitae\normal, eleifend ac,
+Aenean leo ligula, porttitor eu, consequat \italic vitae\normal, eleifend ac,
 enim. Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus.
 Phasellus viverra nulla ut metus varius laoreet. Quisque rutrum. Aenean
-imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.
-
-Nam eget dui. Etiam rhoncus. Maecenas tempus, tellus eget condimentum rhoncus,
-sem quam semper libero, \italic »sit amet adipiscing sem neque« \normal sed ipsum.
-Nam quam nunc, blandit vel, luctus pulvinar, hendrerit id, lorem. Maecenas nec
-odio et ante tincidunt tempus. Donec vitae sapien ut libero venenatis faucibus.
-Nullam quis ante. Etiam sit amet orci eget eros faucibus tincidunt. Duis leo.
-Sed fringilla mauris sit amet nibh. Donec sodales sagittis magna. Sed consequat,
-leo eget bibendum sodales, augue velit cursus nunc.
-
-Blöde „Sonderzeichen“ sind doof! © €
-
-OpenType fonts with ligatures like ff, ffi and ffj are also supported.`
+imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.`
