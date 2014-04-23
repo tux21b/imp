@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/md5"
+	"encoding/ascii85"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -182,13 +183,19 @@ func (w *PDFWriter) WriteFontEmbedded(id int, f *font.Font) {
 
 	// font stream
 	w.WriteObjectStart(fontStream)
+	streamBuf := &bytes.Buffer{}
+	enc := ascii85.NewEncoder(streamBuf)
+	enc.Write(cff)
+	enc.Close()
+	fontStreamBytes := streamBuf.Bytes()
+
 	if cff == nil {
 		ttf := f.TTF()
 		fmt.Fprintf(w, "<< /Length %d /Length1 %d >>\n", len(ttf), len(ttf))
 		fmt.Fprintf(w, "stream\n%s\nendstream\n", ttf)
 	} else {
-		fmt.Fprintf(w, "<< /Length %d /Length1 %d /Subtype /CIDFontType0C >>\n", len(cff), len(cff)) // CIDType0C or Type1C depending on the font
-		fmt.Fprintf(w, "stream\n%s\nendstream\n", cff)
+		fmt.Fprintf(w, "<< /Length %d /Length1 %d /Filter /ASCII85Decode /Subtype /CIDFontType0C >>\n", len(fontStreamBytes), len(cff)) // CIDType0C or Type1C depending on the font
+		fmt.Fprintf(w, "stream\n%s\nendstream\n", fontStreamBytes)
 	}
 	w.WriteObjectEnd()
 
