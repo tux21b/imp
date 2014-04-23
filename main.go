@@ -192,6 +192,13 @@ func main() {
 	}
 
 	tokens := Lex(fullText)
+	for i := range tokens {
+		r, _ := utf8.DecodeRuneInString(tokens[i])
+		if !unicode.IsSpace(r) && r != '\\' {
+			tokens[i] = strings.Join(Hyphenate(tokens[i]), "-")
+		}
+	}
+
 	imp.SplitLines(tokens, float64(pageB.Width.Computed))
 
 	w.WriteObjectf(info, "<< /Title (Hallo Welt) >>")
