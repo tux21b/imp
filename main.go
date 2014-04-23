@@ -39,9 +39,22 @@ func (m *Imp) GetFontId(f *font.Font) string {
 }
 
 type State struct {
-	Imp  *Imp
-	Font *font.Font
-	Size float64
+	Imp       *Imp
+	Font      *font.Font
+	Size      float64
+	SmallCaps bool
+	Ligatures bool
+}
+
+func (s *State) StringToGlyphs(text string) []font.Index {
+	glyphs := s.Font.StringToGlyphs(text)
+	if s.SmallCaps {
+		glyphs = s.Font.SmallCaps(glyphs)
+	}
+	if s.Ligatures {
+		glyphs = s.Font.Ligatures(glyphs)
+	}
+	return glyphs
 }
 
 func (s *State) Clone() *State {
@@ -135,8 +148,9 @@ func main() {
 		fontBold:   fontBold,
 		fontItalic: fontItalic,
 		State: &State{
-			Font: fontNormal,
-			Size: 12,
+			Font:      fontNormal,
+			Size:      12,
+			Ligatures: true,
 		},
 	}
 
@@ -184,6 +198,18 @@ func main() {
 				tokens[i] = SetFont{Font: fontNormal, Size: 12}
 			case "\\italic":
 				tokens[i] = SetFont{Font: fontItalic, Size: 12}
+			case "\\blue":
+				tokens[i] = SetTextColor{1, .34, 0, .21}
+			case "\\black":
+				tokens[i] = SetTextColor{0, 0, 0, 1}
+			case "\\smcpon":
+				tokens[i] = StateAction(func(s *State) {
+					s.SmallCaps = true
+				})
+			case "\\smcpoff":
+				tokens[i] = StateAction(func(s *State) {
+					s.SmallCaps = false
+				})
 			}
 		case Space:
 			if strings.Count(string(tok), "\n") >= 2 {
@@ -268,7 +294,7 @@ func main() {
 				inTJ = true
 			}
 			buf.WriteString("<")
-			glyphs := imp.State.Font.StringToGlyphs(string(x))
+			glyphs := imp.State.StringToGlyphs(string(x))
 			for i := range glyphs {
 				if i > 0 {
 					kern := imp.State.Font.Kerning(1000, glyphs[i-1], glyphs[i])
@@ -315,6 +341,14 @@ func main() {
 			}
 			id := imp.GetFontId(imp.State.Font)
 			fmt.Fprintf(buf, "%s %.4f Tf\n", id, imp.State.Size)
+		case SetTextColor:
+			if inTJ {
+				buf.WriteString("] TJ\n")
+				inTJ = false
+			}
+			fmt.Fprintf(buf, "%.4f %.4f %.4f %.4f k\n", x.C, x.M, x.Y, x.K)
+		case StateAction:
+			x(imp.State)
 		}
 	}
 	if inTJ {
@@ -417,7 +451,7 @@ func Lex(input string) []Token {
 func GetWidth(s *State, t Token) float64 {
 	switch t := t.(type) {
 	case Text:
-		glyphs := s.Font.StringToGlyphs(string(t))
+		glyphs := s.StringToGlyphs(string(t))
 		width := 0.0
 		for i := range glyphs {
 			width += float64(s.Font.Scale(s.Font.HMetric(glyphs[i]).Width, 1000)) / 1000 * s.Size
@@ -440,6 +474,8 @@ func GetWidth(s *State, t Token) float64 {
 		if t.Size != 0 {
 			s.Size = float64(t.Size)
 		}
+	case StateAction:
+		t(s)
 	}
 	return 0
 }
@@ -464,12 +500,18 @@ type Space string
 
 type Macro string
 
+type SetTextColor struct {
+	C, M, Y, K float32
+}
+
 type SetFont struct {
 	Font *font.Font
 	Size int
 }
 
-var fullText = `\title Hello Imp!\normal\par
+type StateAction func(s *State)
+
+var fullText = `\title\blue\smcpon Hello Imp!\smcpoff\normal\black\par
 
 \normal This output was produced by \bold Imp\normal, a very early prototype
 of a \italic modern typesetting system \normal written in Go. Imp is able

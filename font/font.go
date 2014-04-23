@@ -38,6 +38,8 @@ type Font struct {
 	kern      []Kerning
 	classKern *classKerner
 
+	smcpBefore, smcpAfter []Index
+
 	// font tables
 	full []byte // complete TTF / OTF file
 	head []byte // font header
@@ -122,6 +124,9 @@ func Parse(data []byte) (*Font, error) {
 		return nil, err
 	}
 	if err := f.parseGsub(); err != nil {
+		return nil, err
+	}
+	if err := f.parseGsubSmcp(); err != nil {
 		return nil, err
 	}
 	if err := f.parseGpos(); err != nil {
@@ -264,18 +269,12 @@ func (f *Font) parseGsub() error {
 			ligaSetCount := int(u16(data, subblockOffset+4))
 
 			// parse coverage
-			if coverageOffset+4+2*ligaSetCount > len(data) {
-				return errorf("unexpected end of GSUB coverage at 0x%x", coverageOffset)
+			coverage, err := f.parseCoverage(data, coverageOffset)
+			if err != nil {
+				return err
 			}
-			if format := u16(data, coverageOffset); format != 1 {
-				return errorf("unsupported GSUB coverage format %d", format)
-			}
-			if count := int(u16(data, coverageOffset+2)); count != ligaSetCount {
+			if len(coverage) != ligaSetCount {
 				return errorf("GSUB coverage length doesn't match ligature set length")
-			}
-			coverage := make([]Index, ligaSetCount)
-			for k := 0; k < len(coverage); k++ {
-				coverage[k] = Index(u16(data, coverageOffset+4+2*k))
 			}
 
 			// parse ligature sets
@@ -313,6 +312,133 @@ func (f *Font) parseGsub() error {
 		}
 	}
 	return nil
+}
+
+func (f *Font) parseGsubSmcp() error {
+	data := f.tables["GSUB"]
+	if len(data) == 0 {
+		return nil // GSUB block is optional
+	}
+	if len(data) < 10 {
+		return errorf("GSUB block is too short (%d bytes)", len(data))
+	}
+	var (
+		scriptTableOffset  = int(u16(data, 4))
+		featureTableOffset = int(u16(data, 6))
+		lookupTableOffset  = int(u16(data, 8))
+	)
+
+	featureIDs, err := f.parseScriptTable(data, scriptTableOffset, "", "")
+	if err != nil {
+		return err
+	}
+
+	lookupIDs, err := f.parseFeatureTable(data, featureTableOffset, featureIDs, "smcp")
+	if err != nil {
+		return nil
+	}
+
+	// parse lookup table
+	if lookupTableOffset+2 > len(data) {
+		return errorf("invalid GSUB lookup table at 0x%x", lookupTableOffset)
+	}
+	lookupCount := int(u16(data, lookupTableOffset))
+	if lookupTableOffset+2+lookupCount*2 > len(data) {
+		return errorf("unexpected end of GSUB lookup table with %d entries", lookupCount)
+	}
+	for _, i := range lookupIDs {
+		offset := int(u16(data, lookupTableOffset+2+i*2)) + lookupTableOffset
+
+		if offset+6 > len(data) {
+			return errorf("unexpected end of GSUB lookup entry at 0x%x", offset)
+		}
+		kind := int(u16(data, offset))
+		subblockCount := int(u16(data, offset+4))
+		if offset+6+subblockCount*2 > len(data) {
+			return errorf("unexpected end of GSUB lookup entry at 0x%x", offset)
+		}
+		if kind != 1 {
+			return errorf("unsupported GSUB lookup type %d", kind)
+		}
+		for j := 0; j < subblockCount; j++ {
+			subblockOffset := int(u16(data, offset+6+j*2)) + offset
+			if subblockOffset+6 > len(data) {
+				return errorf("unexpected end of GSUB subblock at 0x%x", subblockOffset)
+			}
+			if format := u16(data, subblockOffset); format != 2 {
+				return errorf("unsupported GSUB lookup type 1 format %d", format)
+			}
+			coverageOffset := int(u16(data, subblockOffset+2)) + subblockOffset
+			setCount := int(u16(data, subblockOffset+4))
+
+			// parse coverage
+			coverage, err := f.parseCoverage(data, coverageOffset)
+			if err != nil {
+				return err
+			}
+			if len(coverage) != setCount {
+				return errorf("GSUB coverage length doesn't match set length")
+			}
+			if subblockOffset+6+setCount*2 > len(data) {
+				return errorf("unexpected end of GSUB liga subblock at 0x%x", subblockOffset)
+			}
+			repl := make([]Index, setCount)
+			for k := 0; k < len(repl); k++ {
+				repl[k] = Index(u16(data, subblockOffset+6+2*k))
+			}
+			f.smcpBefore = coverage
+			f.smcpAfter = repl
+		}
+	}
+	return nil
+}
+
+func (f *Font) SmallCaps(glyphs []Index) []Index {
+	if f.smcpBefore == nil {
+		return glyphs
+	}
+	for i := range glyphs {
+		for j := range f.smcpBefore {
+			if f.smcpBefore[j] == glyphs[i] {
+				glyphs[i] = f.smcpAfter[j]
+			}
+		}
+	}
+	return glyphs
+}
+
+func (f *Font) parseCoverage(data []byte, offset int) ([]Index, error) {
+	if offset+4 > len(data) {
+		return nil, errorf("unexpected end of coverage list at 0x%x", offset)
+	}
+	format := u16(data, offset)
+	count := int(u16(data, offset+2))
+	switch format {
+	case 1:
+		if offset+4+count*2 > len(data) {
+			return nil, errorf("unexpected end of coverage list at 0x%x", offset)
+		}
+		glyphs := make([]Index, count)
+		for i := range glyphs {
+			glyphs[i] = Index(u16(data, offset+4+2*i))
+		}
+		return glyphs, nil
+	case 2:
+		if offset+4+count*6 > len(data) {
+			return nil, errorf("unexpected end of coverage list at 0x%x", offset)
+		}
+		var glyphs []Index
+		for i := 0; i < count; i++ {
+			first := Index(u16(data, offset+4+6*i))
+			last := Index(u16(data, offset+4+6*i+2))
+			for g := first; g <= last; g++ {
+				glyphs = append(glyphs, g)
+			}
+		}
+		return glyphs, nil
+	default:
+		return nil, errorf("unsupported coverage format %d", format)
+	}
 }
 
 func (f *Font) parseGpos() error {
@@ -790,10 +916,9 @@ func (f *Font) Index(x rune) Index {
 	return 0
 }
 
-func (f *Font) StringToGlyphs(text string) []Index {
-	var glyphs []Index
-	for _, r := range text {
-		glyphs = append(glyphs, f.Index(r))
+func (f *Font) Ligatures(glyphs []Index) []Index {
+	if len(f.liga) == 0 {
+		return glyphs
 	}
 	for i := 0; i < len(glyphs); i++ {
 		for _, liga := range f.liga {
@@ -814,6 +939,14 @@ func (f *Font) StringToGlyphs(text string) []Index {
 			glyphs = append(glyphs[:i+1], glyphs[i+len(liga.Old):]...)
 			break
 		}
+	}
+	return glyphs
+}
+
+func (f *Font) StringToGlyphs(text string) []Index {
+	var glyphs []Index
+	for _, r := range text {
+		glyphs = append(glyphs, f.Index(r))
 	}
 	return glyphs
 }
