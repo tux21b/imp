@@ -4,7 +4,6 @@
 package main
 
 import (
-	"./font"
 	"bufio"
 	"bytes"
 	"crypto/md5"
@@ -16,6 +15,8 @@ import (
 	"math"
 	"time"
 	"unicode"
+
+	"github.com/tux21b/imp/font"
 )
 
 type PDFWriter struct {

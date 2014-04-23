@@ -4,7 +4,6 @@
 package main
 
 import (
-	"./font"
 	"bytes"
 	"fmt"
 	"image"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/tux21b/imp/font"
 )
 
 type Imp struct {
@@ -122,15 +123,15 @@ func (m *Imp) Apply(cmd string) {
 }
 
 func main() {
-	fontNormal, err := font.Open("AGaramondPro-Regular.otf")
+	fontNormal, err := font.Open("fonts/SourceSansPro-Regular.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fontBold, err := font.Open("AGaramondPro-Bold.otf")
+	fontBold, err := font.Open("fonts/SourceSansPro-Bold.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fontItalic, err := font.Open("AGaramondPro-Italic.otf")
+	fontItalic, err := font.Open("fonts/SourceSansPro-It.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
