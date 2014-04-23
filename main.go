@@ -39,11 +39,16 @@ func (m *Imp) GetFontId(f *font.Font) string {
 }
 
 type State struct {
-	Imp       *Imp
-	Font      *font.Font
-	Size      float64
-	SmallCaps bool
-	Ligatures bool
+	Imp        *Imp
+	Font       *font.Font
+	Size       float64
+	SmallCaps  bool
+	Ligatures  bool
+	LineHeight float64
+	ParSkip    float64
+	MaxWidth   float64
+	YPos       float64
+	ColStart   float64
 }
 
 func (s *State) StringToGlyphs(text string) []font.Index {
@@ -64,28 +69,39 @@ func (s *State) Clone() *State {
 
 func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
 	pos := 0
+	state := m.State.Clone()
 	for pos < len(tokens) {
 		width := 0.0
 		breakPos := -1
-		s := m.State.Clone()
+		s := state.Clone()
 		for i := pos; i < len(tokens); i++ {
-			if w := GetWidth(s, tokens[i]); width+w > maxWidth {
+			if a, ok := tokens[i].(StateAction); ok {
+				a(s)
+			}
+			if w := GetWidth(s, tokens[i]); width+w > s.MaxWidth {
 				break
 			} else {
 				width += w
 			}
-			switch tokens[i].(type) {
+			switch x := tokens[i].(type) {
 			case LineBreak, ParagraphBreak:
 				breakPos = i
 				i = len(tokens)
 			case CanBreak:
-				breakPos = i
+				if width+GetWidth(s, x.Before) < s.MaxWidth {
+					breakPos = i
+				}
 			}
 		}
 		if breakPos < 0 {
 			return
 		}
 		for i := pos; i < breakPos; i++ {
+			if a, ok := tokens[i].(StateAction); ok {
+				a(state)
+			} else {
+				GetWidth(state, tokens[i])
+			}
 			if tok, ok := tokens[i].(CanBreak); ok {
 				tokens[i] = tok.NoBreak
 			}
@@ -148,9 +164,12 @@ func main() {
 		fontBold:   fontBold,
 		fontItalic: fontItalic,
 		State: &State{
-			Font:      fontNormal,
-			Size:      12,
-			Ligatures: true,
+			Font:       fontNormal,
+			Size:       12,
+			Ligatures:  true,
+			LineHeight: 1.4,
+			ParSkip:    1.8,
+			MaxWidth:   0.0,
 		},
 	}
 
@@ -191,7 +210,7 @@ func main() {
 			case "\\break":
 				tokens[i] = LineBreak{}
 			case "\\title":
-				tokens[i] = SetFont{Font: fontBold, Size: 20}
+				tokens[i] = SetFont{Font: fontBold, Size: 24}
 			case "\\bold":
 				tokens[i] = SetFont{Font: fontBold, Size: 12}
 			case "\\normal":
@@ -210,6 +229,13 @@ func main() {
 				tokens[i] = StateAction(func(s *State) {
 					s.SmallCaps = false
 				})
+			case "\\column":
+				tokens[i] = StateAction(func(s *State) {
+					s.ColStart = s.YPos
+					s.MaxWidth = 0.48 * s.MaxWidth
+				})
+			case "\\nextcolumn":
+				tokens[i] = ColBreak{}
 			}
 		case Space:
 			if strings.Count(string(tok), "\n") >= 2 {
@@ -230,16 +256,10 @@ func main() {
 			i += len(repl) - 1
 		}
 	}
-	/*
-		for i := range tokens {
-			r, _ := utf8.DecodeRuneInString(tokens[i])
-			if !unicode.IsSpace(r) && r != '\\' {
-				tokens[i] = strings.Join(Hyphenate(tokens[i]), "-")
-			}
-		}
-	*/
 
-	imp.SplitLines(tokens, float64(pageB.Width.Computed))
+	imp.State.MaxWidth = float64(pageB.Width.Computed)
+
+	imp.SplitLines(tokens, 0)
 
 	w.WriteObjectf(info, "<< /Title (Hallo Welt) >>")
 	w.WriteObjectf(root, "<< /Type /Catalog /Pages %d 0 R >>", pages)
@@ -256,13 +276,14 @@ func main() {
 		pageB.PaddingBottom.Computed,
 		pageB.Width.Computed,
 		pageB.Height.Computed)
-	yPos := pageB.PaddingBottom.Computed + pageB.Height.Computed - float32(imp.CalcMaxAscent(tokens))
+	imp.State.YPos = float64(pageB.PaddingBottom.Computed+pageB.Height.Computed) - imp.CalcMaxAscent(tokens)
 	fmt.Fprintf(buf, "BT /F1 %.4f Tf\n1.4 TL\n%.4f %.4f Td\n",
-		imp.State.Size, pageB.PaddingLeft.Computed, yPos)
+		imp.State.Size, pageB.PaddingLeft.Computed, imp.State.YPos)
 
 	inTJ := false
 	wordSpacing := 0.0
 	updateSpacing := -1
+	yMin := 0.0
 	for pos, token := range tokens {
 		if pos >= updateSpacing {
 			width := 0.0
@@ -274,7 +295,7 @@ func main() {
 				w := GetWidth(s, tokens[i])
 				switch tokens[i].(type) {
 				case LineBreak:
-					wordSpacing = (float64(pageB.Width.Computed) - width) / float64(numSpaces)
+					wordSpacing = (s.MaxWidth - width) / float64(numSpaces)
 					updateSpacing = i + 1
 					i = len(tokens)
 				case ParagraphBreak:
@@ -319,15 +340,25 @@ func main() {
 				buf.WriteString("] TJ\n")
 				inTJ = false
 			}
-			fmt.Fprintf(buf, "0 %.4f Td\n", -1.4*imp.State.Size)
-			yPos += -1.4 * float32(imp.State.Size)
+			fmt.Fprintf(buf, "0 %.4f Td\n", -imp.State.LineHeight*imp.State.Size)
+			imp.State.YPos += -imp.State.LineHeight * float64(imp.State.Size)
 		case ParagraphBreak:
 			if inTJ {
 				buf.WriteString("] TJ\n")
 				inTJ = false
 			}
-			fmt.Fprintf(buf, "0 %.4f Td\n", -1.4*imp.State.Size*1.8)
-			yPos += -1.4 * float32(imp.State.Size) * 1.8
+			fmt.Fprintf(buf, "0 %.4f Td\n", -imp.State.LineHeight*imp.State.Size*imp.State.ParSkip)
+			imp.State.YPos += -imp.State.LineHeight * float64(imp.State.Size) * imp.State.ParSkip
+		case ColBreak:
+			if inTJ {
+				buf.WriteString("] TJ\n")
+				inTJ = false
+			}
+			yOff := imp.State.ColStart - imp.State.YPos
+			xOff := float64(pageB.Width.Computed) - imp.State.MaxWidth
+			fmt.Fprintf(buf, "%.4f %.4f Td\n", xOff, yOff)
+			yMin = imp.State.YPos
+			imp.State.YPos = imp.State.ColStart
 		case SetFont:
 			if inTJ {
 				buf.WriteString("] TJ\n")
@@ -356,10 +387,14 @@ func main() {
 	}
 	buf.WriteString("ET\n")
 
+	if y := imp.State.YPos; y < yMin {
+		yMin = y
+	}
+
 	imgS := img.Bounds().Size()
-	imgW := pageB.Width.Computed
-	imgH := float32(imgS.Y) * imgW / float32(imgS.X)
-	imgY := 0.5*(yPos-pageB.PaddingBottom.Computed-imgH) + pageB.PaddingBottom.Computed
+	imgW := float64(pageB.Width.Computed)
+	imgH := float64(imgS.Y) * imgW / float64(imgS.X)
+	imgY := 0.5*(yMin-float64(pageB.PaddingBottom.Computed)-imgH) + float64(pageB.PaddingBottom.Computed)
 	fmt.Fprintf(buf, `q
 1 0 0 1 %.4f %.4f cm
 %.4f 0 0 %.4f 0 0 cm
@@ -504,6 +539,8 @@ type SetTextColor struct {
 	C, M, Y, K float32
 }
 
+type ColBreak struct{}
+
 type SetFont struct {
 	Font *font.Font
 	Size int
@@ -518,25 +555,40 @@ of a \italic modern typesetting system \normal written in Go. Imp is able
 to output PDF files, has full Unicode support and supports modern font
 formats like OpenType™ and TrueType™.
 
-For example Imp currently works well with characters like € or ©, can deal
-with other languages \italic „Umlaute sind blöd“ \normal and renders
-ligatures like Th, ff, ffi, ffj automatically. A good input format with an
-extensive macro system (similar to TeX or lout) is still missing. Feel
-free to contribute!
+\column\blue\smcpon\bold OpenType™ Fonts\smcpoff\normal\black\par
 
-Lorem \italic ipsum dolor \normal sit amet, consectetuer adipiscing elit. Aenean commodo
-ligula eget dolor. Aenean massa. Cum sociis natoque penatibus et magnis dis
-parturient montes, \bold nascetur ridiculus mus\normal. Donec quam felis,
-ultricies nec, pellentesque eu, pretium quis, sem. Nulla consequat massa quis enim.
+You can use your favorite OpenType™ and TrueType™ fonts with Imp, including
+special features like \italic kerning\normal, \italic ligatures \normal and
+\italic small caps\normal. Adobe's excellent \bold Source Sans Pro \normal
+font family is included by default.
 
-Donec pede \bold justo, fringilla \normal vel, aliquet nec, vulputate eget,
-arcu. In enim justo, rhoncus ut, imperdiet a, venenatis vitae, justo. Nullam
-dictum felis eu pede mollis pretium. Integer tincidunt. Cras dapibus. Vivamus
-elementum semper nisi. Aenean vulputate eleifend tellus.
+\blue\smcpon\bold Unicode Support\smcpoff\normal\black\par
 
-Aenean leo ligula, porttitor eu, consequat \italic vitae\normal, eleifend ac,
-enim. Aliquam lorem ante, dapibus in, viverra quis, feugiat a, tellus.
-Phasellus viverra nulla ut metus varius laoreet. Quisque rutrum. Aenean
-imperdiet. Etiam ultricies nisi vel augue. Curabitur ullamcorper ultricies nisi.
+Imp comes with full Unicode support. You can simply type any character you
+want and Imp will happily display it as long as your font contains a suitable
+glyph for it.
 
-BV BW BH F, P. Tä V.`
+\blue\smcpon\bold Extensive Markup\smcpoff\normal\black\par
+
+Future versions of Imp should feature a simple markup language with an
+extensive macro system similar to \italic TeX \normal or \italic lout\normal.
+Defining such a language is however a very complex task and no
+progress has been made so far.
+
+\nextcolumn\blue\smcpon\bold Go Package\smcpoff\normal\black\par
+
+Imp's main strength is typesetting generated content automatically in a
+beautiful way. The Go package allows you to easily embed Imp in your own
+application for server side PDF generation. Complex layouts can be achieved
+by extended Imp with additional plug-ins written in Go.
+
+\blue\smcpon\bold Open Source\smcpoff\normal\black\par
+
+The whole project is available freely and licensed under the \italic
+BSD (3 clause) license\normal. Development has just started and the
+source code of the prototype still looks horrible. Sorry for that.
+
+Anyway, feel free to grab the source from \bold GitHub \normal and join
+the project today!
+
+xxx a b c`
