@@ -89,26 +89,21 @@ func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
 }
 
 func (m *Imp) CalcMaxAscent(line []Token) float64 {
-	return 0.0
-	/*
-		ascent := 0.0
-		m.PushState()
-		for _, tok := range line {
-			if strings.HasPrefix(tok, "\\") {
-				if tok == "\\par" || tok == "\\break" {
-					break
-				} else {
-					m.Apply(tok)
-				}
-			}
-			a := float64(m.State.Font.Scale(m.State.Font.Ascender, 1000)) / 1000 * m.State.Size
+	ascent := 0.0
+	s := m.State.Clone()
+	for _, tok := range line {
+		GetWidth(s, tok)
+		switch tok.(type) {
+		case LineBreak, ParagraphBreak:
+			return ascent
+		case Text, Space:
+			a := float64(s.Font.Scale(s.Font.Ascender, 1000)) / 1000 * s.Size
 			if a > ascent {
 				ascent = a
 			}
 		}
-		m.PopState()
-		return ascent
-	*/
+	}
+	return ascent
 }
 
 func main() {
