@@ -1,7 +1,7 @@
 // Copyright (c) 2014 by Christoph Hack <christoph@tux21b.org>
 // All rights reserved. Distributed under the Simplified BSD License.
 
-package main
+package pdf
 
 import (
 	"bufio"
@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/tux21b/imp/font"
+	"github.com/tux21b/imp/imp/otf"
 )
 
 type PDFWriter struct {
@@ -109,7 +109,7 @@ func (w *PDFWriter) WriteFooter(root, info int) {
 	w.w.Flush()
 }
 
-func (w *PDFWriter) WriteFontEmbedded(id int, f *font.Font) {
+func (w *PDFWriter) WriteFontEmbedded(id int, f *otf.Font) {
 	var (
 		fontBase       = id
 		fontDescedant  = w.NextID()
@@ -134,7 +134,7 @@ func (w *PDFWriter) WriteFontEmbedded(id int, f *font.Font) {
 	// font descedant
 	widths := make([]int, f.NumGlyphs())
 	for i := 0; i < len(widths); i++ {
-		widths[i] = f.Scale(f.HMetric(font.Index(i)).Width, 1000)
+		widths[i] = f.Scale(f.HMetric(otf.Index(i)).Width, 1000)
 	}
 	fontType := 2
 	if cff != nil {

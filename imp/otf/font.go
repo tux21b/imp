@@ -1,10 +1,10 @@
 // Copyright (c) 2014 by Christoph Hack <christoph@tux21b.org>
 // All rights reserved. Distributed under the Simplified BSD License.
 
-// Package font implements a parser for TrueType and OpenType fonts.
+// Package otf implements a parser for TrueType and OpenType fonts.
 // Those formats are documented at http://developer.apple.com/fonts/TTRefMan/
 // and http://www.microsoft.com/typography/otspec/.
-package font
+package otf
 
 import (
 	"fmt"

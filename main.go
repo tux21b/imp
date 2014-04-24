@@ -14,21 +14,23 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/tux21b/imp/font"
+	"github.com/tux21b/imp/imp/otf"
+	"github.com/tux21b/imp/imp/pdf"
+	"github.com/tux21b/imp/imp/text"
 )
 
 type Imp struct {
-	fontNormal *font.Font
-	fontBold   *font.Font
-	fontItalic *font.Font
+	fontNormal *otf.Font
+	fontBold   *otf.Font
+	fontItalic *otf.Font
 
 	State      *State
 	stateStack []*State
 
-	Fonts []*font.Font
+	Fonts []*otf.Font
 }
 
-func (m *Imp) GetFontId(f *font.Font) string {
+func (m *Imp) GetFontId(f *otf.Font) string {
 	for i := 0; i < len(m.Fonts); i++ {
 		if m.Fonts[i] == f {
 			return fmt.Sprintf("/F%d", i+1)
@@ -40,7 +42,7 @@ func (m *Imp) GetFontId(f *font.Font) string {
 
 type State struct {
 	Imp        *Imp
-	Font       *font.Font
+	Font       *otf.Font
 	Size       float64
 	SmallCaps  bool
 	Ligatures  bool
@@ -51,7 +53,7 @@ type State struct {
 	ColStart   float64
 }
 
-func (s *State) StringToGlyphs(text string) []font.Index {
+func (s *State) StringToGlyphs(text string) []otf.Index {
 	glyphs := s.Font.StringToGlyphs(text)
 	if s.SmallCaps {
 		glyphs = s.Font.SmallCaps(glyphs)
@@ -136,15 +138,15 @@ func (m *Imp) CalcMaxAscent(line []Token) float64 {
 }
 
 func main() {
-	fontNormal, err := font.Open("fonts/SourceSansPro-Regular.otf")
+	fontNormal, err := otf.Open("fonts/SourceSansPro-Regular.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fontBold, err := font.Open("fonts/SourceSansPro-Bold.otf")
+	fontBold, err := otf.Open("fonts/SourceSansPro-Bold.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fontItalic, err := font.Open("fonts/SourceSansPro-It.otf")
+	fontItalic, err := otf.Open("fonts/SourceSansPro-It.otf")
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -179,7 +181,7 @@ func main() {
 	}
 	defer out.Close()
 
-	w := NewPDFWriter(out)
+	w := pdf.NewPDFWriter(out)
 	w.WriteHeader()
 
 	var (
@@ -244,7 +246,7 @@ func main() {
 				tokens[i] = CanBreak{NoBreak: tok}
 			}
 		case Text:
-			parts := Hyphenate(string(tok))
+			parts := text.Hyphenate(string(tok))
 			repl := make([]Token, 0, 2*len(parts)-1)
 			for j := range parts {
 				if j > 0 {
@@ -542,7 +544,7 @@ type SetTextColor struct {
 type ColBreak struct{}
 
 type SetFont struct {
-	Font *font.Font
+	Font *otf.Font
 	Size int
 }
 

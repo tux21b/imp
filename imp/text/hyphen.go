@@ -1,7 +1,7 @@
 // Copyright (c) 2014 by Christoph Hack <christoph@tux21b.org>
 // All rights reserved. Distributed under the Simplified BSD License.
 
-package main
+package text
 
 import (
 	"sort"
