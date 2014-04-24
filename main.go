@@ -150,6 +150,10 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	fontLight, err := otf.Open("fonts/SourceSansPro-Light.otf")
+	if err != nil {
+		log.Fatalln(err)
+	}
 
 	imgFile, err := os.Open("buddy.jpg")
 	if err != nil {
@@ -211,14 +215,20 @@ func main() {
 				tokens[i] = ParagraphBreak{}
 			case "\\break":
 				tokens[i] = LineBreak{}
-			case "\\title":
-				tokens[i] = SetFont{Font: fontBold, Size: 24}
 			case "\\bold":
-				tokens[i] = SetFont{Font: fontBold, Size: 12}
+				tokens[i] = SetFont{Font: fontBold}
+			case "\\light":
+				tokens[i] = SetFont{Font: fontLight}
 			case "\\normal":
-				tokens[i] = SetFont{Font: fontNormal, Size: 12}
+				tokens[i] = SetFont{Font: fontNormal}
 			case "\\italic":
-				tokens[i] = SetFont{Font: fontItalic, Size: 12}
+				tokens[i] = SetFont{Font: fontItalic}
+			case "\\Large":
+				tokens[i] = SetFont{Size: 24}
+			case "\\large":
+				tokens[i] = SetFont{Size: 14}
+			case "\\normalsize":
+				tokens[i] = SetFont{Size: 12}
 			case "\\blue":
 				tokens[i] = SetTextColor{1, .34, 0, .21}
 			case "\\black":
@@ -550,12 +560,12 @@ type SetFont struct {
 
 type StateAction func(s *State)
 
-var fullText = `\title\blue\smcpon Hello Imp!\smcpoff\normal\black\par
+var fullText = `\Large\bold\blue\smcpon Hello Imp!\smcpoff\normal\normalsize\black\par
 
-\normal This output was produced by \bold Imp\normal, a very early prototype
-of a \italic modern typesetting system \normal written in Go. Imp is able
+\large\light This output was produced by \normal Imp\light, a very early prototype
+of a \italic modern typesetting system \light written in Go. Imp is able
 to output PDF files, has full Unicode support and supports modern font
-formats like OpenType™ and TrueType™.
+formats like OpenType™ and TrueType™.\normal\normalsize\par\break
 
 \column\blue\smcpon\bold OpenType™ Fonts\smcpoff\normal\black\par
 
