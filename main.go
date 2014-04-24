@@ -51,6 +51,8 @@ type State struct {
 	MaxWidth   float64
 	YPos       float64
 	ColStart   float64
+	Justify    bool
+	Hyphenate  bool
 }
 
 func (s *State) StringToGlyphs(text string) []otf.Index {
@@ -69,18 +71,20 @@ func (s *State) Clone() *State {
 	return &cp
 }
 
-func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
+func (m *Imp) SplitLines(tokens []Token, maxWidth float64) []Token {
 	pos := 0
 	state := m.State.Clone()
 	for pos < len(tokens) {
 		width := 0.0
 		breakPos := -1
+		breakFound := false
 		s := state.Clone()
 		for i := pos; i < len(tokens); i++ {
 			if a, ok := tokens[i].(StateAction); ok {
 				a(s)
 			}
 			if w := GetWidth(s, tokens[i]); width+w > s.MaxWidth {
+				breakFound = true
 				break
 			} else {
 				width += w
@@ -88,6 +92,7 @@ func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
 			switch x := tokens[i].(type) {
 			case LineBreak, ParagraphBreak:
 				breakPos = i
+				breakFound = true
 				i = len(tokens)
 			case CanBreak:
 				if width+GetWidth(s, x.Before) < s.MaxWidth {
@@ -96,7 +101,10 @@ func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
 			}
 		}
 		if breakPos < 0 {
-			return
+			return tokens
+		}
+		if !breakFound {
+			breakPos = len(tokens)
 		}
 		for i := pos; i < breakPos; i++ {
 			if a, ok := tokens[i].(StateAction); ok {
@@ -108,15 +116,18 @@ func (m *Imp) SplitLines(tokens []Token, maxWidth float64) {
 				tokens[i] = tok.NoBreak
 			}
 		}
-		if tok, ok := tokens[breakPos].(CanBreak); ok {
-			if tok.Before != nil {
-				tokens = append(tokens[:breakPos], append([]Token{tok.Before}, tokens[breakPos:]...)...)
-				breakPos++
+		if breakPos < len(tokens) {
+			if tok, ok := tokens[breakPos].(CanBreak); ok {
+				if tok.Before != nil {
+					tokens = append(tokens[:breakPos], append([]Token{tok.Before}, tokens[breakPos:]...)...)
+					breakPos++
+				}
+				tokens[breakPos] = LineBreak{}
 			}
-			tokens[breakPos] = LineBreak{}
 		}
 		pos = breakPos + 1
 	}
+	return tokens
 }
 
 func (m *Imp) CalcMaxAscent(line []Token) float64 {
@@ -241,6 +252,14 @@ func main() {
 				tokens[i] = StateAction(func(s *State) {
 					s.SmallCaps = false
 				})
+			case "\\justify":
+				tokens[i] = StateAction(func(s *State) {
+					s.Justify = true
+				})
+			case "\\raggedright":
+				tokens[i] = StateAction(func(s *State) {
+					s.Justify = false
+				})
 			case "\\column":
 				tokens[i] = StateAction(func(s *State) {
 					s.ColStart = s.YPos
@@ -271,7 +290,7 @@ func main() {
 
 	imp.State.MaxWidth = float64(pageB.Width.Computed)
 
-	imp.SplitLines(tokens, 0)
+	tokens = imp.SplitLines(tokens, 0)
 
 	w.WriteObjectf(info, "<< /Title (Hallo Welt) >>")
 	w.WriteObjectf(root, "<< /Type /Catalog /Pages %d 0 R >>", pages)
@@ -307,7 +326,11 @@ func main() {
 				w := GetWidth(s, tokens[i])
 				switch tokens[i].(type) {
 				case LineBreak:
-					wordSpacing = (s.MaxWidth - width) / float64(numSpaces)
+					if s.Justify {
+						wordSpacing = (s.MaxWidth - width) / float64(numSpaces)
+					} else {
+						wordSpacing = 0
+					}
 					updateSpacing = i + 1
 					i = len(tokens)
 				case ParagraphBreak:
@@ -404,14 +427,18 @@ func main() {
 	}
 
 	imgS := img.Bounds().Size()
-	imgW := float64(pageB.Width.Computed)
-	imgH := float64(imgS.Y) * imgW / float64(imgS.X)
-	imgY := 0.5*(yMin-float64(pageB.PaddingBottom.Computed)-imgH) + float64(pageB.PaddingBottom.Computed)
-	fmt.Fprintf(buf, `q
-1 0 0 1 %.4f %.4f cm
-%.4f 0 0 %.4f 0 0 cm
-/I1 Do
-Q`, pageB.PaddingLeft.Computed, imgY, imgW, imgH)
+	imgB := &ImageBox{
+		B: Bounds{
+			X: float64(pageB.PaddingLeft.Computed),
+			Y: float64(pageB.PaddingBottom.Computed),
+			W: float64(pageB.Width.Computed),
+			H: float64(imgS.Y) * float64(pageB.Width.Computed) / float64(imgS.X),
+		},
+		Img: img,
+	}
+
+	fmt.Fprintf(buf, `q 1 0 0 1 %.4f %.4f cm %.4f 0 0 %.4f 0 0 cm /I1 Do Q `,
+		imgB.B.X, imgB.B.Y, imgB.B.W, imgB.B.H)
 
 	w.WriteObjectStart(contents)
 	w.WriteStreamPlain(buf.String())
@@ -558,16 +585,26 @@ type SetFont struct {
 	Size int
 }
 
+type Bounds struct {
+	X, Y float64
+	W, H float64
+}
+
+type ImageBox struct {
+	B   Bounds
+	Img image.Image
+}
+
 type StateAction func(s *State)
 
 var fullText = `\Large\bold\blue\smcpon Hello Imp!\smcpoff\normal\normalsize\black\par
 
-\large\light This output was produced by \normal Imp\light, a very early prototype
-of a \italic modern typesetting system \light written in Go. Imp is able
+\large\light\justify This output was produced by \normal Imp\light, a very early
+prototype of a \italic modern typesetting system \light written in Go. Imp is able
 to output PDF files, has full Unicode support and supports modern font
 formats like OpenType™ and TrueType™.\normal\normalsize\par\break
 
-\column\blue\smcpon\bold OpenType™ Fonts\smcpoff\normal\black\par
+\column\justify\blue\smcpon\bold OpenType™ Fonts\smcpoff\normal\black\par
 
 You can use your favorite OpenType™ and TrueType™ fonts with Imp, including
 special features like \italic kerning\normal, \italic ligatures \normal and
@@ -592,7 +629,7 @@ progress has been made so far.
 Imp's main strength is typesetting generated content automatically in a
 beautiful way. The Go package allows you to easily embed Imp in your own
 application for server side PDF generation. Complex layouts can be achieved
-by extended Imp with additional plug-ins written in Go.
+by extending Imp with additional plug-ins written in Go.
 
 \blue\smcpon\bold Open Source\smcpoff\normal\black\par
 
@@ -601,6 +638,4 @@ BSD (3 clause) license\normal. Development has just started and the
 source code of the prototype still looks horrible. Sorry for that.
 
 Anyway, feel free to grab the source from \bold GitHub \normal and join
-the project today!
-
-xxx a b c`
+the project today!`
