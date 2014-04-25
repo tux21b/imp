@@ -9,6 +9,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	"log"
+	"math"
 	"os"
 	"strings"
 	"unicode"
@@ -71,63 +72,77 @@ func (s *State) Clone() *State {
 	return &cp
 }
 
-func (m *Imp) SplitLines(tokens []Token, maxWidth float64) []Token {
-	pos := 0
-	state := m.State.Clone()
-	for pos < len(tokens) {
-		width := 0.0
-		breakPos := -1
-		breakFound := false
-		s := state.Clone()
-		for i := pos; i < len(tokens); i++ {
-			if a, ok := tokens[i].(StateAction); ok {
-				a(s)
-			}
-			if w := GetWidth(s, tokens[i]); width+w > s.MaxWidth {
-				breakFound = true
-				break
-			} else {
-				width += w
-			}
-			switch x := tokens[i].(type) {
-			case LineBreak, ParagraphBreak:
-				breakPos = i
-				breakFound = true
-				i = len(tokens)
-			case CanBreak:
-				if width+GetWidth(s, x.Before) < s.MaxWidth {
-					breakPos = i
-				}
-			}
-		}
-		if breakPos < 0 {
-			return tokens
-		}
-		if !breakFound {
-			breakPos = len(tokens)
-		}
-		for i := pos; i < breakPos; i++ {
-			if a, ok := tokens[i].(StateAction); ok {
-				a(state)
-			} else {
-				GetWidth(state, tokens[i])
-			}
-			if tok, ok := tokens[i].(CanBreak); ok {
-				tokens[i] = tok.NoBreak
-			}
-		}
-		if breakPos < len(tokens) {
-			if tok, ok := tokens[breakPos].(CanBreak); ok {
-				if tok.Before != nil {
-					tokens = append(tokens[:breakPos], append([]Token{tok.Before}, tokens[breakPos:]...)...)
-					breakPos++
-				}
-				tokens[breakPos] = LineBreak{}
-			}
-		}
-		pos = breakPos + 1
+func (m *Imp) SplitLines(tokens []Token, width float64) []Token {
+	minima := make([]float64, len(tokens)+1)
+	widths := make([]float64, len(tokens)+1)
+	breaks := make([]int, len(tokens)+1)
+	maxwidth := make([]float64, len(tokens)+1)
+	change := make([]bool, len(tokens))
+	s := m.State.Clone()
+	for i := range tokens {
+		widths[i+1] = GetWidth(s, tokens[i]) + widths[i]
+		minima[i+1] = math.Inf(1)
+		maxwidth[i+1] = s.MaxWidth
 	}
-	return tokens
+	start := 0
+	for start < len(tokens) {
+		end := len(tokens)
+		for i := start; i < len(tokens); i++ {
+			if _, ok := tokens[i].(ParagraphBreak); ok {
+				end = i
+				break
+			}
+		}
+		minima[start] = 0
+		for i := start; i < end; i++ {
+			spaces := 0
+			for j := i + 1; j <= end; j++ {
+				if _, ok := tokens[j-1].(CanBreak); !ok && j != end {
+					continue
+				}
+				w := widths[j] - widths[i]
+				penalty := 0.0
+				if cb, ok := tokens[j-1].(CanBreak); ok {
+					spaces++
+					w += GetWidth(s, cb.Before)
+					if t, ok := cb.Before.(Text); ok && t == "-" {
+						penalty += 100.0
+					}
+				}
+				width := maxwidth[j]
+				if w > width {
+					break
+				}
+				cost := minima[i] + penalty
+				if j != end {
+					cost += (width - w) * (width - w) / float64(spaces)
+				}
+				if cost < minima[j] {
+					minima[j] = cost
+					breaks[j] = i
+				}
+			}
+		}
+		for j := breaks[end]; j > 0; j = breaks[j] {
+			change[j-1] = true
+		}
+		start = end + 1
+	}
+
+	ntokens := make([]Token, 0, len(tokens))
+	for i := range tokens {
+		if cb, ok := tokens[i].(CanBreak); ok {
+			if change[i] {
+				ntokens = append(ntokens, cb.Before)
+				ntokens = append(ntokens, LineBreak{})
+			} else {
+				ntokens = append(ntokens, cb.NoBreak)
+			}
+		} else {
+			ntokens = append(ntokens, tokens[i])
+		}
+	}
+	return ntokens
 }
 
 func (m *Imp) CalcMaxAscent(line []Token) float64 {
